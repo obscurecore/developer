@@ -17,7 +17,7 @@ import org.springframework.http.HttpStatus
 class InstitutionService {
 
     private val logger = LoggerFactory.getLogger(InstitutionService::class.java)
-    private val csvFilePath = "/data/institutions.csv" // Рекомендуется вынести в application.properties
+    private val csvFilePath = "institutions.csv" // Рекомендуется вынести в application.properties
     private val baseUrl = "https://edu.tatar.ru/index.htm"
     private val targetDistricts = setOf(
         "Авиастроительный",

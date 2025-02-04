@@ -7,6 +7,7 @@ import io.swagger.v3.oas.annotations.Operation
 import io.swagger.v3.oas.annotations.Parameter
 import io.swagger.v3.oas.annotations.responses.ApiResponse
 import io.swagger.v3.oas.annotations.responses.ApiResponses
+import io.swagger.v3.oas.annotations.media.Schema
 
 @RestController
 @RequestMapping("/api")
@@ -40,13 +41,17 @@ class InstitutionController(private val institutionService: InstitutionService) 
 
         @Parameter(
             description = "Список районов для фильтрации образовательных учреждений. " +
-                    "Поддерживаемые значения: Авиастроительный, Вахитовский, Кировский, Московский, " +
-                    "Ново-Савиновский, Приволжский, Советский",
-            example = "Авиастроительный,Вахитовский"
+                    "Допустимые значения: AVIA, VAHI, KIRO, MOSC, NOVO, PRIV, SOVI",
+            schema = Schema(
+                implementation = District::class,
+                allowableValues = ["AVIA", "VAHI", "KIRO", "MOSC", "NOVO", "PRIV", "SOVI"]
+            )
         )
-        @RequestParam(required = false) districts: List<String>?
+        @RequestParam(required = false) districts: List<District>?
     ): ResponseEntity<List<InstitutionDetails>> {
-        return institutionService.scrapeInstitutions(update, districts)
-            .also { logger.info("Запрос скрапинга учреждений с update=$update и districts=$districts") }
+        // Преобразуем полученный список District в список строк для обработки в сервисе
+        val districtNames: List<String>? = districts?.map { it.value }
+        return institutionService.scrapeInstitutions(update, districtNames)
+            .also { logger.info("Запрос скрапинга учреждений с update=$update и districts=${districtNames}") }
     }
 }
