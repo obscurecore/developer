@@ -31,8 +31,9 @@ dependencies {
     // OpenCSV для работы с CSV файлами
     implementation("com.opencsv:opencsv:5.7.1")
 
-    // Springdoc OpenAPI для генерации документации Swagger
-    implementation("org.springdoc:springdoc-openapi-ui:1.6.14")
+
+    // Springdoc OpenAPI для генерации документации Swagger (обновлённая зависимость для Spring Boot 3)
+    implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:2.1.0")
 
     // Kotlin Reflection
     implementation("org.jetbrains.kotlin:kotlin-reflect")

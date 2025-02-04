@@ -10,6 +10,8 @@ import org.jsoup.nodes.Document
 import org.slf4j.LoggerFactory
 import org.springframework.http.ResponseEntity
 import org.springframework.stereotype.Service
+import org.springframework.web.server.ResponseStatusException
+import org.springframework.http.HttpStatus
 
 @Service
 class InstitutionService {
@@ -27,17 +29,18 @@ class InstitutionService {
         "Советский"
     )
 
-    fun scrapeInstitutions(update: Boolean, districts: List<String>?): ResponseEntity<Any> {
+    fun scrapeInstitutions(update: Boolean, districts: List<String>?): ResponseEntity<List<InstitutionDetails>> {
         initializeCsvFile()
 
         if (update) {
             try {
-                val mainDoc = fetchDocument(baseUrl) ?: return ResponseEntity.badRequest()
-                    .body(mapOf("error" to "Не удалось загрузить главную страницу"))
+                val mainDoc = fetchDocument(baseUrl) ?: throw ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "Не удалось загрузить главную страницу"
+                )
 
                 val districtLinks = extractDistrictLinks(mainDoc)
                 if (districtLinks.isEmpty()) {
-                    return ResponseEntity.badRequest().body(mapOf("error" to "Не удалось найти ссылки на районы"))
+                    throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Не удалось найти ссылки на районы")
                 }
 
                 // Определение районов для обработки
@@ -48,14 +51,17 @@ class InstitutionService {
                 }
 
                 if (districtsToProcess.isEmpty()) {
-                    return ResponseEntity.badRequest()
-                        .body(mapOf("error" to "Указанные районы не найдены в целевых районах"))
+                    throw ResponseStatusException(
+                        HttpStatus.BAD_REQUEST, "Указанные районы не найдены в целевых районах"
+                    )
                 }
 
                 val filteredDistrictLinks = districtLinks.filterKeys { it in districtsToProcess }
 
                 if (filteredDistrictLinks.isEmpty()) {
-                    return ResponseEntity.badRequest().body(mapOf("error" to "Не найдены ссылки на указанные районы"))
+                    throw ResponseStatusException(
+                        HttpStatus.BAD_REQUEST, "Не найдены ссылки на указанные районы"
+                    )
                 }
 
                 filteredDistrictLinks.forEach { (district, districtUrl) ->
@@ -64,8 +70,7 @@ class InstitutionService {
 
             } catch (e: Exception) {
                 logger.error("Ошибка при обновлении данных: ${e.message}", e)
-                return ResponseEntity.internalServerError()
-                    .body(mapOf("error" to "Внутренняя ошибка сервера"))
+                throw ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Внутренняя ошибка сервера")
             }
         }
 
@@ -76,10 +81,10 @@ class InstitutionService {
             } else {
                 institutions
             }
-            ResponseEntity.ok().body(filteredInstitutions)
+            ResponseEntity.ok(filteredInstitutions)
         } catch (e: Exception) {
             logger.error("Ошибка при чтении данных: ${e.message}", e)
-            ResponseEntity.internalServerError().body(mapOf("error" to "Ошибка при чтении данных"))
+            throw ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Ошибка при чтении данных")
         }
     }
 
