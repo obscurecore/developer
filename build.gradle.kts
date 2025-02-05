@@ -1,25 +1,37 @@
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
 plugins {
-    id("org.springframework.boot") version "3.1.2" // Убедитесь, что версия актуальна
-    id("io.spring.dependency-management") version "1.1.0" // Актуальная версия
-    kotlin("jvm") version "1.9.25" // Актуальная версия Kotlin
+    id("org.springframework.boot") version "3.1.2"
+    id("io.spring.dependency-management") version "1.1.0"
+    kotlin("jvm") version "1.9.25"
     kotlin("plugin.spring") version "1.9.25"
 }
 
 group = "org.obscurecore.developer"
 version = "0.0.1-SNAPSHOT"
-java.sourceCompatibility = JavaVersion.VERSION_17 // Или ваша версия Java
+java.sourceCompatibility = JavaVersion.VERSION_17
 
 repositories {
     mavenCentral()
 }
 
 dependencies {
-    // Spring Boot Starter Web включает в себя spring-boot-starter-logging (SLF4J и Logback)
+
+    // Основная зависимость Starter для Spring Boot (часто хватает одной):
+
+
+
+
+    // Включает Web + логирование (Logback) по умолчанию
     implementation("org.springframework.boot:spring-boot-starter-web")
-    implementation("org.springframework.boot:spring-boot-starter")
-    implementation("org.telegram:telegrambots-spring-boot-starter:6.5.0") // проверьте актуальную версию
+
+    // Если добавляли раньше, можете убрать:
+    // implementation("org.springframework.boot:spring-boot-starter")
+
+    // Исключаем log4j-slf4j2-impl из телеграм-стартер
+    implementation("org.telegram:telegrambots-spring-boot-starter:6.5.0") {
+        exclude(group = "org.apache.logging.log4j", module = "log4j-slf4j2-impl")
+    }
 
     // Jsoup для веб-скрапинга
     implementation("org.jsoup:jsoup:1.16.1")
@@ -33,8 +45,7 @@ dependencies {
     // OpenCSV для работы с CSV файлами
     implementation("com.opencsv:opencsv:5.7.1")
 
-
-    // Springdoc OpenAPI для генерации документации Swagger (обновлённая зависимость для Spring Boot 3)
+    // Springdoc OpenAPI для генерации документации Swagger
     implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:2.1.0")
 
     // Kotlin Reflection
@@ -47,19 +58,10 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-starter-test")
 }
 
-// Исключение конфликтующих зависимостей
-configurations.all {
-    exclude(group = "commons-logging", module = "commons-logging")
-    exclude(group = "org.apache.logging.log4j", module = "log4j-api")
-    exclude(group = "org.apache.logging.log4j", module = "log4j-to-slf4j")
-    exclude(group = "org.slf4j", module = "jul-to-slf4j")
-}
-
-// Настройки компилятора Kotlin
 tasks.withType<KotlinCompile> {
     kotlinOptions {
         freeCompilerArgs = listOf("-Xjsr305=strict")
-        jvmTarget = "17" // Совместимо с Java версией, указанной выше
+        jvmTarget = "17"
     }
 }
 

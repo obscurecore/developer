@@ -2,23 +2,26 @@ package org.obscurecore.developer
 
 import com.opencsv.CSVReader
 import com.opencsv.CSVWriter
-import java.io.File
-import java.io.FileReader
-import java.io.FileWriter
+import org.apache.poi.ss.usermodel.CellType
+import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.slf4j.LoggerFactory
+import org.springframework.core.io.ByteArrayResource
+import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.stereotype.Service
 import org.springframework.web.server.ResponseStatusException
-import org.springframework.http.HttpStatus
+import java.io.*
+import java.util.*
 
 @Service
 class InstitutionService {
 
     private val logger = LoggerFactory.getLogger(InstitutionService::class.java)
-    private val csvFilePath = "institutions.csv" // Рекомендуется вынести в application.properties
+    private val csvFilePath = "institutions.csv"
     private val baseUrl = "https://edu.tatar.ru/index.htm"
+
     private val targetDistricts = setOf(
         "Авиастроительный",
         "Вахитовский",
@@ -29,7 +32,13 @@ class InstitutionService {
         "Советский"
     )
 
-    fun scrapeInstitutions(update: Boolean, districts: List<String>?): ResponseEntity<List<InstitutionDetails>> {
+    /**
+     * Основной метод, возвращающий список учреждений.
+     * При update=true обновляет данные через скрапинг, затем читает CSV-файл.
+     * При update=false просто читает CSV-файл (если данные уже есть).
+     * districts - список названий районов (на русском).
+     */
+    fun scrapeInstitutionsAsList(update: Boolean, districts: List<String>?): List<InstitutionDetails> {
         initializeCsvFile()
 
         if (update) {
@@ -75,17 +84,66 @@ class InstitutionService {
         }
 
         return try {
-            val institutions = readCsvFile()
-            val filteredInstitutions = if (!districts.isNullOrEmpty()) {
-                institutions.filter { it.district in districts }
+            val allInstitutions = readCsvFile()
+            // Если указаны районы — фильтруем
+            if (!districts.isNullOrEmpty()) {
+                allInstitutions.filter { it.district in districts }
             } else {
-                institutions
+                allInstitutions
             }
-            ResponseEntity.ok(filteredInstitutions)
         } catch (e: Exception) {
             logger.error("Ошибка при чтении данных: ${e.message}", e)
             throw ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Ошибка при чтении данных")
         }
+    }
+
+    /**
+     * Генерация Excel-файла (XLSX) из списка учреждений.
+     */
+    fun generateExcel(institutions: List<InstitutionDetails>): ByteArray {
+        val workbook = XSSFWorkbook()
+        val sheet = workbook.createSheet("Institutions")
+
+        // Заголовки
+        val header = sheet.createRow(0)
+        header.createCell(0, CellType.STRING).setCellValue("ID")
+        header.createCell(1, CellType.STRING).setCellValue("Тип")
+        header.createCell(2, CellType.STRING).setCellValue("Номер")
+        header.createCell(3, CellType.STRING).setCellValue("Количество учащихся")
+        header.createCell(4, CellType.STRING).setCellValue("Район")
+        header.createCell(5, CellType.STRING).setCellValue("Ссылка")
+
+        // Запись строк
+        institutions.forEachIndexed { index, inst ->
+            val row = sheet.createRow(index + 1)
+            row.createCell(0).setCellValue(inst.id)
+            row.createCell(1).setCellValue(inst.type)
+            row.createCell(2).setCellValue(inst.number)
+            row.createCell(3).setCellValue(inst.studentsCount)
+            row.createCell(4).setCellValue(inst.district)
+            row.createCell(5).setCellValue(inst.url)
+        }
+
+        ByteArrayOutputStream().use { bos ->
+            workbook.write(bos)
+            workbook.close()
+            return bos.toByteArray()
+        }
+    }
+
+    private fun fetchDocument(url: String): Document? {
+        return try {
+            Jsoup.connect(url).get()
+        } catch (e: Exception) {
+            logger.error("Ошибка загрузки страницы: $url. Причина: ${e.message}", e)
+            null
+        }
+    }
+
+    private fun extractDistrictLinks(mainDoc: Document): Map<String, String> {
+        return mainDoc.select("a")
+            .filter { element -> element.text().trim() in targetDistricts }
+            .associate { element -> element.text().trim() to element.absUrl("href") }
     }
 
     private fun processDistrict(district: String, districtUrl: String) {
@@ -127,39 +185,6 @@ class InstitutionService {
         }
     }
 
-    private fun readCsvFile(): List<InstitutionDetails> {
-        val file = File(csvFilePath)
-        if (!file.exists()) return emptyList()
-
-        CSVReader(FileReader(file)).use { reader ->
-            return reader.readAll().drop(1).mapNotNull { parts ->
-                if (parts.size == 6) InstitutionDetails(
-                    id = parts[0],
-                    type = parts[1],
-                    number = parts[2],
-                    studentsCount = parts[3],
-                    district = parts[4],
-                    url = parts[5]
-                ) else null
-            }
-        }
-    }
-
-    private fun fetchDocument(url: String): Document? {
-        return try {
-            Jsoup.connect(url).get()
-        } catch (e: Exception) {
-            logger.error("Ошибка загрузки страницы: $url. Причина: ${e.message}", e)
-            null
-        }
-    }
-
-    private fun extractDistrictLinks(mainDoc: Document): Map<String, String> {
-        return mainDoc.select("a")
-            .filter { element -> element.text().trim() in targetDistricts }
-            .associate { element -> element.text().trim() to element.absUrl("href") }
-    }
-
     private fun fetchEducationLinks(districtDoc: Document, educationType: String): String? {
         val educationLinkElement = districtDoc.selectFirst("a:has(span:contains($educationType))")
         return educationLinkElement?.absUrl("href")
@@ -169,48 +194,12 @@ class InstitutionService {
         return doc.select("a")
             .filter { element ->
                 val text = element.text().trim()
-                text.contains(keyword, ignoreCase = true) || text.matches(Regex(".*\\d{1,3}.*"))
+                text.contains(keyword, ignoreCase = true) ||
+                        text.matches(Regex(".*\\d{1,3}.*")) // ищем номера (№12 и т.п.)
             }
             .map { it.absUrl("href") }
             .filter { it.isNotEmpty() }
             .distinct()
-    }
-
-    private fun isInstitutionInCsv(institutionId: String): Boolean {
-        val file = File(csvFilePath)
-        if (!file.exists()) return false
-        CSVReader(FileReader(file)).use { reader ->
-            return reader.readAll().any { it[0] == institutionId }
-        }
-    }
-
-    private fun initializeCsvFile() {
-        val file = File(csvFilePath)
-        if (!file.exists()) {
-            CSVWriter(FileWriter(file, false)).use { writer ->
-                writer.writeNext(arrayOf("ID", "Тип учреждения", "Номер", "Количество учащихся", "Район", "Ссылка"))
-            }
-            logger.info("Создан новый CSV-файл по пути $csvFilePath")
-        }
-    }
-
-    private fun addInstitutionToCsv(institution: InstitutionDetails) {
-        CSVWriter(FileWriter(csvFilePath, true)).use { writer ->
-            writer.writeNext(
-                arrayOf(
-                    institution.id,
-                    institution.type,
-                    institution.number,
-                    institution.studentsCount,
-                    institution.district,
-                    institution.url
-                )
-            )
-        }
-    }
-
-    private fun extractInstitutionId(url: String): String {
-        return url.substringAfterLast("/").substringBefore(".")
     }
 
     private fun fetchInstitutionDetails(
@@ -248,5 +237,62 @@ class InstitutionService {
             pattern.find(text)?.groupValues?.get(1)?.toIntOrNull()?.let { total += it }
         }
         return total
+    }
+
+    private fun readCsvFile(): List<InstitutionDetails> {
+        val file = File(csvFilePath)
+        if (!file.exists()) return emptyList()
+
+        CSVReader(FileReader(file)).use { reader ->
+            return reader.readAll().drop(1).mapNotNull { parts ->
+                if (parts.size == 6) {
+                    InstitutionDetails(
+                        id = parts[0],
+                        type = parts[1],
+                        number = parts[2],
+                        studentsCount = parts[3],
+                        district = parts[4],
+                        url = parts[5]
+                    )
+                } else null
+            }
+        }
+    }
+
+    private fun initializeCsvFile() {
+        val file = File(csvFilePath)
+        if (!file.exists()) {
+            CSVWriter(FileWriter(file, false)).use { writer ->
+                writer.writeNext(arrayOf("ID", "Тип учреждения", "Номер", "Количество учащихся", "Район", "Ссылка"))
+            }
+            logger.info("Создан новый CSV-файл по пути $csvFilePath")
+        }
+    }
+
+    private fun isInstitutionInCsv(institutionId: String): Boolean {
+        val file = File(csvFilePath)
+        if (!file.exists()) return false
+        CSVReader(FileReader(file)).use { reader ->
+            return reader.readAll().any { it[0] == institutionId }
+        }
+    }
+
+    private fun addInstitutionToCsv(institution: InstitutionDetails) {
+        CSVWriter(FileWriter(csvFilePath, true)).use { writer ->
+            writer.writeNext(
+                arrayOf(
+                    institution.id,
+                    institution.type,
+                    institution.number,
+                    institution.studentsCount,
+                    institution.district,
+                    institution.url
+                )
+            )
+        }
+    }
+
+    private fun extractInstitutionId(url: String): String {
+        return url.substringAfterLast("/").substringBefore(".")
     }
 }

@@ -1,37 +1,35 @@
 package org.obscurecore.developer
 
 import LandPlot
-import java.io.InputStream
 import org.apache.poi.ss.usermodel.CellType
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import org.slf4j.LoggerFactory
-import org.springframework.http.ResponseEntity
 import org.springframework.stereotype.Service
 import org.springframework.web.multipart.MultipartFile
+import java.io.InputStream
 
 @Service
 class LandPlotService {
 
     private val logger = LoggerFactory.getLogger(LandPlotService::class.java)
 
-    fun uploadLandPlots(file: MultipartFile): ResponseEntity<List<LandPlot>> {
+    fun uploadLandPlotsAsList(file: MultipartFile): List<LandPlot> {
         if (file.isEmpty) {
-            logger.warn("Uploaded file is empty")
-            return ResponseEntity.badRequest().body(emptyList())
+            logger.warn("Загруженный файл пустой.")
+            return emptyList()
         }
-
         if (!isExcelFile(file)) {
-            logger.warn("Uploaded file is not an Excel file")
-            return ResponseEntity.badRequest().body(emptyList())
+            logger.warn("Загруженный файл не является Excel (XLSX).")
+            return emptyList()
         }
 
         return try {
             val landPlots = readExcelData(file.inputStream)
-            logger.info("Successfully processed ${landPlots.size} land plots from file ${file.originalFilename}")
-            ResponseEntity.ok(landPlots)
+            logger.info("Успешно обработано участков: ${landPlots.size}")
+            landPlots
         } catch (e: Exception) {
-            logger.error("Error processing file ${file.originalFilename}: ${e.message}", e)
-            ResponseEntity.badRequest().build()
+            logger.error("Ошибка при обработке файла ${file.originalFilename}: ${e.message}", e)
+            emptyList()
         }
     }
 
@@ -40,15 +38,18 @@ class LandPlotService {
         return contentType == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     }
 
-    fun readExcelData(inputStream: InputStream): List<LandPlot> {
+    private fun readExcelData(inputStream: InputStream): List<LandPlot> {
         val plots = mutableListOf<LandPlot>()
         XSSFWorkbook(inputStream).use { workbook ->
-            val sheet = workbook.getSheetAt(0) ?: throw IllegalArgumentException("Sheet is empty")
-            val header = sheet.getRow(0) ?: throw IllegalArgumentException("Header row is missing")
+            val sheet = workbook.getSheetAt(0) ?: return emptyList()
+            val header = sheet.getRow(0) ?: return emptyList()
+
+            // Определяем индекс каждого интересующего столбца по заголовкам
             val columnIndexes = header.mapIndexed { index, cell -> getCellStringValue(cell) to index }.toMap()
 
+            // Перебираем строки
             for (row in sheet) {
-                if (row.rowNum == 0) continue // Пропустить заголовок
+                if (row.rowNum == 0) continue // пропускаем заголовок
 
                 val landPlot = LandPlot(
                     plotId = row.getCellValue(columnIndexes["fid"]),
