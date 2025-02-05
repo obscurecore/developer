@@ -18,6 +18,8 @@ repositories {
 dependencies {
     // Spring Boot Starter Web включает в себя spring-boot-starter-logging (SLF4J и Logback)
     implementation("org.springframework.boot:spring-boot-starter-web")
+    implementation("org.springframework.boot:spring-boot-starter")
+    implementation("org.telegram:telegrambots-spring-boot-starter:6.5.0") // проверьте актуальную версию
 
     // Jsoup для веб-скрапинга
     implementation("org.jsoup:jsoup:1.16.1")
