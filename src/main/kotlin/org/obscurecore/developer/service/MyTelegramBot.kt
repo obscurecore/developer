@@ -1,9 +1,5 @@
 package org.obscurecore.developer.service
 
-import java.io.ByteArrayInputStream
-import java.net.URI
-import org.obscurecore.developer.dto.BotState
-import org.obscurecore.developer.dto.ScrapeSettings
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.http.MediaType
@@ -18,9 +14,14 @@ import org.telegram.telegrambots.meta.api.objects.Update
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException
+import java.io.ByteArrayInputStream
+import java.net.URI
+import org.obscurecore.developer.dto.BotState
+import org.obscurecore.developer.dto.ScrapeSettings
 
 /**
  * Telegram-бот для управления скрапингом, загрузкой Excel и извлечением изображений из PDF.
+ * Теперь пользователь всегда может вернуться в главное меню, нажав кнопку «🏠 Главное меню» или отправив команду /menu.
  */
 @Component
 class MyTelegramBot(
@@ -43,6 +44,15 @@ class MyTelegramBot(
     override fun onUpdateReceived(update: Update?) {
         if (update == null) return
 
+        // Если пользователь отправил команду /menu, сразу возвращаем главное меню
+        if (update.hasMessage() && update.message.text?.trim()?.equals("/menu", ignoreCase = true) == true) {
+            val chatId = update.message.chatId
+            userStates[chatId] = BotState.IDLE
+            userScrapeSettings[chatId] = ScrapeSettings()
+            showMainMenu(chatId, "Главное меню: выберите действие")
+            return
+        }
+
         if (update.hasCallbackQuery()) {
             handleCallback(update.callbackQuery)
             return
@@ -60,13 +70,11 @@ class MyTelegramBot(
                         handleExcelFileUpload(message.document, chatId)
                         return
                     }
-
                     BotState.WAITING_PDF_FILE -> {
                         handlePdfFileUpload(message.document, chatId)
                         return
                     }
-
-                    else -> {}
+                    else -> { }
                 }
             }
 
@@ -76,9 +84,8 @@ class MyTelegramBot(
                     userScrapeSettings[chatId] = ScrapeSettings()
                     showMainMenu(chatId, "Привет! Я бот для компании «Авторы». Выберите действие:")
                 }
-
                 else -> {
-                    sendLongMessage(chatId.toString(), "Неизвестная команда. Для начала работы нажмите /start.")
+                    sendLongMessage(chatId.toString(), "Неизвестная команда. Для возврата в меню нажмите /menu.")
                 }
             }
         }
@@ -90,65 +97,63 @@ class MyTelegramBot(
         val data = callbackQuery.data
 
         when (data) {
+            "GO_TO_MENU" -> {
+                userStates[chatId] = BotState.IDLE
+                userScrapeSettings[chatId] = ScrapeSettings()
+                editTextAndKeyboard(chatId, messageId, "Главное меню: выберите действие", buildMainMenuButtons())
+            }
             "DO_SCRAPE" -> {
                 userStates[chatId] = BotState.SELECT_SCRAPE_TYPE
                 editTextAndKeyboard(chatId, messageId, "Выберите формат результата:", buildScrapeTypeButtons())
             }
-
             "DO_UPLOAD" -> {
                 userStates[chatId] = BotState.WAITING_FILE
-                editTextAndKeyboard(chatId, messageId, "Пришлите Excel-файл (.xlsx)", null)
+                editTextAndKeyboard(chatId, messageId, "Пришлите Excel-файл (.xlsx)", buildBackToMenuKeyboard())
             }
-
             "DO_EXTRACT_PDF" -> {
                 userStates[chatId] = BotState.WAITING_PDF_FILE
-                editTextAndKeyboard(chatId, messageId, "Пришлите PDF-документ (.pdf)", null)
+                editTextAndKeyboard(chatId, messageId, "Пришлите PDF-документ (.pdf)", buildBackToMenuKeyboard())
             }
-
             "SCRAPE_TEXT" -> {
                 userScrapeSettings.getOrPut(chatId) { ScrapeSettings() }.excel = false
                 userStates[chatId] = BotState.SELECT_SCRAPE_DISTRICTS
                 editTextAndKeyboard(chatId, messageId, "Выберите район(ы) для скрапинга:", buildDistrictButtons())
             }
-
             "SCRAPE_EXCEL" -> {
                 userScrapeSettings.getOrPut(chatId) { ScrapeSettings() }.excel = true
                 userStates[chatId] = BotState.SELECT_SCRAPE_DISTRICTS
                 editTextAndKeyboard(chatId, messageId, "Выберите район(ы) для скрапинга:", buildDistrictButtons())
             }
-
             "SCRAPE_DISTRICT_DONE" -> performScrape(chatId, messageId)
             else -> {
                 if (data.startsWith("district_")) {
                     val districtName = data.substringAfter("district_")
                     toggleDistrictSelection(chatId, districtName)
-                    editTextAndKeyboard(
-                        chatId,
-                        messageId,
-                        "Выберите район(ы) для скрапинга (отмеченные добавлены):",
-                        buildDistrictButtons()
-                    )
+                    editTextAndKeyboard(chatId, messageId,
+                        "Выберите район(ы) для скрапинга (отмеченные добавлены):", buildDistrictButtons())
                 }
             }
         }
     }
 
-    private fun showMainMenu(chatId: Long, text: String) {
-        val buttons = InlineKeyboardMarkup.builder().keyboard(
+    /**
+     * Формирует главное меню с кнопками выбора действий.
+     */
+    private fun buildMainMenuButtons(): InlineKeyboardMarkup {
+        val scrapeBtn = InlineKeyboardButton.builder().text("📊 Скрапить учреждения").callbackData("DO_SCRAPE").build()
+        val uploadBtn = InlineKeyboardButton.builder().text("📥 Загрузить Excel LandPlot").callbackData("DO_UPLOAD").build()
+        val pdfBtn = InlineKeyboardButton.builder().text("🖼 Извлечь PDF изображения").callbackData("DO_EXTRACT_PDF").build()
+        return InlineKeyboardMarkup.builder().keyboard(
             listOf(
-                listOf(
-                    InlineKeyboardButton.builder().text("📊 Скрапить учреждения").callbackData("DO_SCRAPE").build()
-                ),
-                listOf(
-                    InlineKeyboardButton.builder().text("📥 Загрузить Excel LandPlot").callbackData("DO_UPLOAD").build()
-                ),
-                listOf(
-                    InlineKeyboardButton.builder().text("🖼 Извлечь PDF изображения").callbackData("DO_EXTRACT_PDF")
-                        .build()
-                )
+                listOf(scrapeBtn),
+                listOf(uploadBtn),
+                listOf(pdfBtn)
             )
         ).build()
+    }
 
+    private fun showMainMenu(chatId: Long, text: String) {
+        val buttons = buildMainMenuButtons()
         val msg = SendMessage().apply {
             this.chatId = chatId.toString()
             this.text = text
@@ -161,10 +166,19 @@ class MyTelegramBot(
         }
     }
 
+    /**
+     * Добавляет к меню кнопку "Главное меню" для возможности возврата.
+     */
+    private fun buildBackToMenuKeyboard(): InlineKeyboardMarkup {
+        val menuBtn = InlineKeyboardButton.builder().text("🏠 Главное меню").callbackData("GO_TO_MENU").build()
+        return InlineKeyboardMarkup.builder().keyboard(listOf(listOf(menuBtn))).build()
+    }
+
     private fun buildScrapeTypeButtons(): InlineKeyboardMarkup {
         val textBtn = InlineKeyboardButton.builder().text("Текст").callbackData("SCRAPE_TEXT").build()
         val excelBtn = InlineKeyboardButton.builder().text("Excel").callbackData("SCRAPE_EXCEL").build()
-        return InlineKeyboardMarkup.builder().keyboard(listOf(listOf(textBtn, excelBtn))).build()
+        val menuBtn = InlineKeyboardButton.builder().text("🏠 Главное меню").callbackData("GO_TO_MENU").build()
+        return InlineKeyboardMarkup.builder().keyboard(listOf(listOf(textBtn, excelBtn), listOf(menuBtn))).build()
     }
 
     private fun buildDistrictButtons(): InlineKeyboardMarkup {
@@ -173,17 +187,17 @@ class MyTelegramBot(
         val rowSize = 3
         available.chunked(rowSize).forEach { chunk ->
             val row = chunk.map { district ->
-                val isSelected =
-                    userScrapeSettings.getOrPut(district.hashCode().toLong()) { ScrapeSettings() }.districts.contains(
-                        district
-                    )
+                val settings = userScrapeSettings.getOrPut(district.hashCode().toLong()) { ScrapeSettings() }
+                val isSelected = settings.districts.contains(district)
                 val text = if (isSelected) "✔️ $district" else district
                 InlineKeyboardButton.builder().text(text).callbackData("district_$district").build()
             }
             rows.add(row)
         }
+        // Добавляем строку с кнопкой "Готово" и кнопку "Главное меню"
         val doneBtn = InlineKeyboardButton.builder().text("Готово").callbackData("SCRAPE_DISTRICT_DONE").build()
-        rows.add(listOf(doneBtn))
+        val menuBtn = InlineKeyboardButton.builder().text("🏠 Главное меню").callbackData("GO_TO_MENU").build()
+        rows.add(listOf(doneBtn, menuBtn))
         return InlineKeyboardMarkup.builder().keyboard(rows).build()
     }
 
@@ -199,7 +213,7 @@ class MyTelegramBot(
         if (settings.excel) urlBuilder.append("&excel=true")
         if (settings.districts.isNotEmpty()) urlBuilder.append("&districts=${settings.districts.joinToString(",")}")
         val finalUrl = urlBuilder.toString()
-        editTextAndKeyboard(chatId, messageId, "Запуск скрапинга...", null)
+        editTextAndKeyboard(chatId, messageId, "Запуск скрапинга...", buildBackToMenuKeyboard())
 
         try {
             if (settings.excel) {
