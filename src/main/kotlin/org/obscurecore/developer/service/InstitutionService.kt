@@ -2,19 +2,23 @@ package org.obscurecore.developer
 
 import com.opencsv.CSVReader
 import com.opencsv.CSVWriter
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.FileReader
+import java.io.FileWriter
 import org.apache.poi.ss.usermodel.CellType
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
+import org.obscurecore.developer.dto.InstitutionDetails
 import org.slf4j.LoggerFactory
-import org.springframework.core.io.ByteArrayResource
 import org.springframework.http.HttpStatus
-import org.springframework.http.ResponseEntity
 import org.springframework.stereotype.Service
 import org.springframework.web.server.ResponseStatusException
-import java.io.*
-import java.util.*
 
+/**
+ * Сервис для скрапинга и обработки данных образовательных учреждений.
+ */
 @Service
 class InstitutionService {
 
@@ -22,89 +26,66 @@ class InstitutionService {
     private val csvFilePath = "institutions.csv"
     private val baseUrl = "https://edu.tatar.ru/index.htm"
 
+    // Целевые районы (на русском)
     private val targetDistricts = setOf(
-        "Авиастроительный",
-        "Вахитовский",
-        "Кировский",
-        "Московский",
-        "Ново-Савиновский",
-        "Приволжский",
-        "Советский"
+        "Авиастроительный", "Вахитовский", "Кировский", "Московский",
+        "Ново-Савиновский", "Приволжский", "Советский"
     )
 
     /**
-     * Основной метод, возвращающий список учреждений.
-     * При update=true обновляет данные через скрапинг, затем читает CSV-файл.
-     * При update=false просто читает CSV-файл (если данные уже есть).
-     * districts - список названий районов (на русском).
+     * Выполняет скрапинг (при update=true) и возвращает список учреждений.
      */
     fun scrapeInstitutionsAsList(update: Boolean, districts: List<String>?): List<InstitutionDetails> {
         initializeCsvFile()
 
         if (update) {
             try {
-                val mainDoc = fetchDocument(baseUrl) ?: throw ResponseStatusException(
-                    HttpStatus.BAD_REQUEST, "Не удалось загрузить главную страницу"
-                )
-
+                val mainDoc = fetchDocument(baseUrl)
+                    ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Не удалось загрузить главную страницу")
                 val districtLinks = extractDistrictLinks(mainDoc)
                 if (districtLinks.isEmpty()) {
                     throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Не удалось найти ссылки на районы")
                 }
 
-                // Определение районов для обработки
-                val districtsToProcess = if (districts.isNullOrEmpty()) {
-                    targetDistricts
-                } else {
-                    targetDistricts.intersect(districts.map { it.trim() }.toSet())
-                }
+                val districtsToProcess = if (districts.isNullOrEmpty()) targetDistricts
+                else targetDistricts.intersect(districts.map { it.trim() }.toSet())
 
                 if (districtsToProcess.isEmpty()) {
                     throw ResponseStatusException(
-                        HttpStatus.BAD_REQUEST, "Указанные районы не найдены в целевых районах"
+                        HttpStatus.BAD_REQUEST,
+                        "Указанные районы не найдены в целевых районах"
                     )
                 }
 
                 val filteredDistrictLinks = districtLinks.filterKeys { it in districtsToProcess }
-
                 if (filteredDistrictLinks.isEmpty()) {
-                    throw ResponseStatusException(
-                        HttpStatus.BAD_REQUEST, "Не найдены ссылки на указанные районы"
-                    )
+                    throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Не найдены ссылки на указанные районы")
                 }
 
-                filteredDistrictLinks.forEach { (district, districtUrl) ->
-                    processDistrict(district, districtUrl)
+                filteredDistrictLinks.forEach { (district, url) ->
+                    processDistrict(district, url)
                 }
-
-            } catch (e: Exception) {
-                logger.error("Ошибка при обновлении данных: ${e.message}", e)
+            } catch (ex: Exception) {
+                logger.error("Ошибка при обновлении данных: ${ex.message}", ex)
                 throw ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Внутренняя ошибка сервера")
             }
         }
 
         return try {
             val allInstitutions = readCsvFile()
-            // Если указаны районы — фильтруем
-            if (!districts.isNullOrEmpty()) {
-                allInstitutions.filter { it.district in districts }
-            } else {
-                allInstitutions
-            }
-        } catch (e: Exception) {
-            logger.error("Ошибка при чтении данных: ${e.message}", e)
+            if (!districts.isNullOrEmpty()) allInstitutions.filter { it.district in districts } else allInstitutions
+        } catch (ex: Exception) {
+            logger.error("Ошибка при чтении данных: ${ex.message}", ex)
             throw ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Ошибка при чтении данных")
         }
     }
 
     /**
-     * Генерация Excel-файла (XLSX) из списка учреждений.
+     * Генерирует Excel-файл (XLSX) из списка учреждений.
      */
     fun generateExcel(institutions: List<InstitutionDetails>): ByteArray {
         val workbook = XSSFWorkbook()
         val sheet = workbook.createSheet("Institutions")
-
-        // Заголовки
         val header = sheet.createRow(0)
         header.createCell(0, CellType.STRING).setCellValue("ID")
         header.createCell(1, CellType.STRING).setCellValue("Тип")
@@ -113,7 +94,6 @@ class InstitutionService {
         header.createCell(4, CellType.STRING).setCellValue("Район")
         header.createCell(5, CellType.STRING).setCellValue("Ссылка")
 
-        // Запись строк
         institutions.forEachIndexed { index, inst ->
             val row = sheet.createRow(index + 1)
             row.createCell(0).setCellValue(inst.id)
@@ -124,26 +104,27 @@ class InstitutionService {
             row.createCell(5).setCellValue(inst.url)
         }
 
-        ByteArrayOutputStream().use { bos ->
+        return ByteArrayOutputStream().use { bos ->
             workbook.write(bos)
             workbook.close()
-            return bos.toByteArray()
+            bos.toByteArray()
         }
     }
 
-    private fun fetchDocument(url: String): Document? {
-        return try {
+    // Вспомогательные методы
+
+    private fun fetchDocument(url: String): Document? =
+        try {
             Jsoup.connect(url).get()
-        } catch (e: Exception) {
-            logger.error("Ошибка загрузки страницы: $url. Причина: ${e.message}", e)
+        } catch (ex: Exception) {
+            logger.error("Ошибка загрузки страницы: $url. Причина: ${ex.message}", ex)
             null
         }
-    }
 
-    private fun extractDistrictLinks(mainDoc: Document): Map<String, String> {
-        return mainDoc.select("a")
+    private fun extractDistrictLinks(doc: Document): Map<String, String> {
+        return doc.select("a")
             .filter { element -> element.text().trim() in targetDistricts }
-            .associate { element -> element.text().trim() to element.absUrl("href") }
+            .associate { it.text().trim() to it.absUrl("href") }
     }
 
     private fun processDistrict(district: String, districtUrl: String) {
@@ -152,7 +133,6 @@ class InstitutionService {
             logger.warn("Не удалось загрузить документ для района $district")
             return
         }
-
         processEducationType(district, districtDoc, "Школы", "Школа")
         processEducationType(district, districtDoc, "Дошкольное образование", "Детский сад")
     }
@@ -163,16 +143,15 @@ class InstitutionService {
         educationType: String,
         institutionType: String
     ) {
-        val educationUrl = fetchEducationLinks(districtDoc, educationType) ?: run {
+        val educationUrl = fetchEducationLinks(districtDoc, educationType)
+        if (educationUrl == null) {
             logger.warn("Ссылка на $educationType не найдена для района $district")
             return
         }
-
         val educationDoc = fetchDocument(educationUrl) ?: run {
             logger.warn("Не удалось загрузить документ для $educationType в районе $district")
             return
         }
-
         val institutionLinks = extractItems(educationDoc, institutionType)
         institutionLinks.forEach { url ->
             val id = extractInstitutionId(url)
@@ -185,41 +164,34 @@ class InstitutionService {
         }
     }
 
-    private fun fetchEducationLinks(districtDoc: Document, educationType: String): String? {
-        val educationLinkElement = districtDoc.selectFirst("a:has(span:contains($educationType))")
-        return educationLinkElement?.absUrl("href")
+    private fun fetchEducationLinks(doc: Document, educationType: String): String? {
+        return doc.selectFirst("a:has(span:contains($educationType))")?.absUrl("href")
     }
 
     private fun extractItems(doc: Document, keyword: String): List<String> {
         return doc.select("a")
             .filter { element ->
                 val text = element.text().trim()
-                text.contains(keyword, ignoreCase = true) ||
-                        text.matches(Regex(".*\\d{1,3}.*")) // ищем номера (№12 и т.п.)
+                text.contains(keyword, ignoreCase = true) || text.matches(Regex(".*\\d{1,3}.*"))
             }
             .map { it.absUrl("href") }
             .filter { it.isNotEmpty() }
             .distinct()
     }
 
-    private fun fetchInstitutionDetails(
-        institutionUrl: String,
-        institutionType: String,
-        district: String
-    ): InstitutionDetails? {
-        val doc = fetchDocument(institutionUrl) ?: return null
+    private fun fetchInstitutionDetails(url: String, institutionType: String, district: String): InstitutionDetails? {
+        val doc = fetchDocument(url) ?: return null
         val shortName = doc.selectFirst("div:contains(Короткое название:)")?.text()?.trim() ?: "Неизвестное учреждение"
         val number = Regex("№\\s?(\\d+)").find(shortName)?.groupValues?.get(1) ?: "Без номера"
         val text = doc.selectFirst("div:contains(У нас учатся)")?.text() ?: ""
         val totalStudentsCount = extractStudentCount(text)
-
         return InstitutionDetails(
-            id = extractInstitutionId(institutionUrl),
+            id = extractInstitutionId(url),
             type = institutionType,
             number = number,
             studentsCount = totalStudentsCount.toString(),
             district = district,
-            url = institutionUrl
+            url = url
         )
     }
 
@@ -231,30 +203,24 @@ class InstitutionService {
             Regex("У нас учатся[:]?\\s*(\\d+)\\s*обучающихся"),
             Regex("У нас учатся[:]?\\s*(\\d+)")
         )
-
-        var total = 0
-        patterns.forEach { pattern ->
-            pattern.find(text)?.groupValues?.get(1)?.toIntOrNull()?.let { total += it }
-        }
-        return total
+        return patterns.mapNotNull { pattern ->
+            pattern.find(text)?.groupValues?.get(1)?.toIntOrNull()
+        }.sum()
     }
 
     private fun readCsvFile(): List<InstitutionDetails> {
         val file = File(csvFilePath)
         if (!file.exists()) return emptyList()
-
         CSVReader(FileReader(file)).use { reader ->
             return reader.readAll().drop(1).mapNotNull { parts ->
-                if (parts.size == 6) {
-                    InstitutionDetails(
-                        id = parts[0],
-                        type = parts[1],
-                        number = parts[2],
-                        studentsCount = parts[3],
-                        district = parts[4],
-                        url = parts[5]
-                    )
-                } else null
+                if (parts.size == 6) InstitutionDetails(
+                    id = parts[0],
+                    type = parts[1],
+                    number = parts[2],
+                    studentsCount = parts[3],
+                    district = parts[4],
+                    url = parts[5]
+                ) else null
             }
         }
     }

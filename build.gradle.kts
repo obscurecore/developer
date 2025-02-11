@@ -16,19 +16,10 @@ repositories {
 }
 
 dependencies {
-
-    // Основная зависимость Starter для Spring Boot (часто хватает одной):
-
-
-
-
-    // Включает Web + логирование (Logback) по умолчанию
+    // Spring Boot Starter для web-приложения (включает встроенное логирование)
     implementation("org.springframework.boot:spring-boot-starter-web")
 
-    // Если добавляли раньше, можете убрать:
-    // implementation("org.springframework.boot:spring-boot-starter")
-
-    // Исключаем log4j-slf4j2-impl из телеграм-стартер
+    // Telegram-бот (исключаем конфликтующий логгер)
     implementation("org.telegram:telegrambots-spring-boot-starter:6.5.0") {
         exclude(group = "org.apache.logging.log4j", module = "log4j-slf4j2-impl")
     }
@@ -36,23 +27,24 @@ dependencies {
     // Jsoup для веб-скрапинга
     implementation("org.jsoup:jsoup:1.16.1")
 
-    // Apache POI для работы с Excel файлами
+    // Apache POI для работы с Excel (XLSX)
     implementation("org.apache.poi:poi-ooxml:5.2.3")
 
-    // Jackson для JSON и Kotlin
+    // Jackson для работы с JSON и Kotlin
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin")
 
-    // OpenCSV для работы с CSV файлами
+    // OpenCSV для обработки CSV файлов
     implementation("com.opencsv:opencsv:5.7.1")
 
-    // Springdoc OpenAPI для генерации документации Swagger
+    // Springdoc OpenAPI для генерации Swagger документации
     implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:2.1.0")
 
-    // Kotlin Reflection
+    // Зависимости Kotlin
     implementation("org.jetbrains.kotlin:kotlin-reflect")
-
-    // Kotlin Standard Library
     implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk8")
+
+    // Apache PDFBox для извлечения изображений из PDF
+    implementation("org.apache.pdfbox:pdfbox:2.0.28")
 
     // Тестирование
     testImplementation("org.springframework.boot:spring-boot-starter-test")

@@ -1,18 +1,24 @@
-package org.obscurecore.developer
+package org.obscurecore.developer.service
 
-import LandPlot
+import java.io.InputStream
 import org.apache.poi.ss.usermodel.CellType
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
+import org.obscurecore.developer.dto.LandPlot
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import org.springframework.web.multipart.MultipartFile
-import java.io.InputStream
 
+/**
+ * Сервис для обработки данных земельных участков из Excel файла.
+ */
 @Service
 class LandPlotService {
 
     private val logger = LoggerFactory.getLogger(LandPlotService::class.java)
 
+    /**
+     * Обрабатывает загруженный Excel файл и возвращает список объектов LandPlot.
+     */
     fun uploadLandPlotsAsList(file: MultipartFile): List<LandPlot> {
         if (file.isEmpty) {
             logger.warn("Загруженный файл пустой.")
@@ -22,20 +28,18 @@ class LandPlotService {
             logger.warn("Загруженный файл не является Excel (XLSX).")
             return emptyList()
         }
-
         return try {
             val landPlots = readExcelData(file.inputStream)
             logger.info("Успешно обработано участков: ${landPlots.size}")
             landPlots
-        } catch (e: Exception) {
-            logger.error("Ошибка при обработке файла ${file.originalFilename}: ${e.message}", e)
+        } catch (ex: Exception) {
+            logger.error("Ошибка при обработке файла ${file.originalFilename}: ${ex.message}", ex)
             emptyList()
         }
     }
 
     private fun isExcelFile(file: MultipartFile): Boolean {
-        val contentType = file.contentType
-        return contentType == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        return file.contentType == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     }
 
     private fun readExcelData(inputStream: InputStream): List<LandPlot> {
@@ -43,14 +47,9 @@ class LandPlotService {
         XSSFWorkbook(inputStream).use { workbook ->
             val sheet = workbook.getSheetAt(0) ?: return emptyList()
             val header = sheet.getRow(0) ?: return emptyList()
-
-            // Определяем индекс каждого интересующего столбца по заголовкам
             val columnIndexes = header.mapIndexed { index, cell -> getCellStringValue(cell) to index }.toMap()
-
-            // Перебираем строки
             for (row in sheet) {
-                if (row.rowNum == 0) continue // пропускаем заголовок
-
+                if (row.rowNum == 0) continue
                 val landPlot = LandPlot(
                     plotId = row.getCellValue(columnIndexes["fid"]),
                     purpose = row.getCellValue(columnIndexes["ВРИ"]),
