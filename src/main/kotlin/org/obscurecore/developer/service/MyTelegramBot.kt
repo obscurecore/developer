@@ -19,10 +19,6 @@ import java.net.URI
 import org.obscurecore.developer.dto.BotState
 import org.obscurecore.developer.dto.ScrapeSettings
 
-/**
- * Telegram-бот для управления скрапингом, загрузкой Excel и извлечением изображений из PDF.
- * Теперь пользователь всегда может вернуться в главное меню, нажав кнопку «🏠 Главное меню» или отправив команду /menu.
- */
 @Component
 class MyTelegramBot(
     @Value("\${telegram.bot.token}") private val botToken: String,
@@ -117,12 +113,12 @@ class MyTelegramBot(
             "SCRAPE_TEXT" -> {
                 userScrapeSettings.getOrPut(chatId) { ScrapeSettings() }.excel = false
                 userStates[chatId] = BotState.SELECT_SCRAPE_DISTRICTS
-                editTextAndKeyboard(chatId, messageId, "Выберите район(ы) для скрапинга:", buildDistrictButtons())
+                editTextAndKeyboard(chatId, messageId, "Выберите район(ы) для скрапинга:", buildDistrictButtons(chatId))
             }
             "SCRAPE_EXCEL" -> {
                 userScrapeSettings.getOrPut(chatId) { ScrapeSettings() }.excel = true
                 userStates[chatId] = BotState.SELECT_SCRAPE_DISTRICTS
-                editTextAndKeyboard(chatId, messageId, "Выберите район(ы) для скрапинга:", buildDistrictButtons())
+                editTextAndKeyboard(chatId, messageId, "Выберите район(ы) для скрапинга:", buildDistrictButtons(chatId))
             }
             "SCRAPE_DISTRICT_DONE" -> performScrape(chatId, messageId)
             else -> {
@@ -130,7 +126,7 @@ class MyTelegramBot(
                     val districtName = data.substringAfter("district_")
                     toggleDistrictSelection(chatId, districtName)
                     editTextAndKeyboard(chatId, messageId,
-                        "Выберите район(ы) для скрапинга (отмеченные добавлены):", buildDistrictButtons())
+                        "Выберите район(ы) для скрапинга (отмеченные добавлены):", buildDistrictButtons(chatId))
                 }
             }
         }
@@ -181,20 +177,27 @@ class MyTelegramBot(
         return InlineKeyboardMarkup.builder().keyboard(listOf(listOf(textBtn, excelBtn), listOf(menuBtn))).build()
     }
 
-    private fun buildDistrictButtons(): InlineKeyboardMarkup {
+    /**
+     * Формирует кнопки для выбора районов с учетом выбранных значений.
+     * Добавляет галочку перед именем выбранного района.
+     */
+    private fun buildDistrictButtons(chatId: Long): InlineKeyboardMarkup {
         val available = listOf("AVIA", "VAHI", "KIRO", "MOSC", "NOVO", "PRIV", "SOVI")
+        val settings = userScrapeSettings.getOrPut(chatId) { ScrapeSettings() }
         val rows = mutableListOf<List<InlineKeyboardButton>>()
         val rowSize = 3
         available.chunked(rowSize).forEach { chunk ->
             val row = chunk.map { district ->
-                val settings = userScrapeSettings.getOrPut(district.hashCode().toLong()) { ScrapeSettings() }
                 val isSelected = settings.districts.contains(district)
                 val text = if (isSelected) "✔️ $district" else district
-                InlineKeyboardButton.builder().text(text).callbackData("district_$district").build()
+                InlineKeyboardButton.builder()
+                    .text(text)
+                    .callbackData("district_$district")
+                    .build()
             }
             rows.add(row)
         }
-        // Добавляем строку с кнопкой "Готово" и кнопку "Главное меню"
+        // Добавляем строку с кнопками "Готово" и "🏠 Главное меню"
         val doneBtn = InlineKeyboardButton.builder().text("Готово").callbackData("SCRAPE_DISTRICT_DONE").build()
         val menuBtn = InlineKeyboardButton.builder().text("🏠 Главное меню").callbackData("GO_TO_MENU").build()
         rows.add(listOf(doneBtn, menuBtn))
