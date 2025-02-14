@@ -1,23 +1,25 @@
 package org.obscurecore.developer.service
 
-import org.slf4j.LoggerFactory
-import org.springframework.beans.factory.annotation.Value
-import org.springframework.http.MediaType
-import org.springframework.stereotype.Component
-import org.springframework.web.client.RestTemplate
-import org.telegram.telegrambots.bots.TelegramLongPollingBot
-import org.telegram.telegrambots.meta.api.methods.send.SendDocument
-import org.telegram.telegrambots.meta.api.methods.send.SendMessage
-import org.telegram.telegrambots.meta.api.methods.updatingmessages.EditMessageText
-import org.telegram.telegrambots.meta.api.objects.InputFile
-import org.telegram.telegrambots.meta.api.objects.Update
-import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup
-import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton
-import org.telegram.telegrambots.meta.exceptions.TelegramApiException
 import java.io.ByteArrayInputStream
 import java.net.URI
 import org.obscurecore.developer.dto.BotState
 import org.obscurecore.developer.dto.ScrapeSettings
+import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Value
+import org.springframework.http.HttpEntity
+import org.springframework.http.HttpHeaders
+import org.springframework.http.MediaType
+import org.springframework.stereotype.Component
+import org.springframework.util.LinkedMultiValueMap
+import org.springframework.web.client.RestTemplate
+import org.telegram.telegrambots.bots.TelegramLongPollingBot
+import org.telegram.telegrambots.meta.api.methods.send.SendDocument
+import org.telegram.telegrambots.meta.api.methods.send.SendMessage
+import org.telegram.telegrambots.meta.api.objects.InputFile
+import org.telegram.telegrambots.meta.api.objects.Update
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardMarkup
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardRow
+import org.telegram.telegrambots.meta.exceptions.TelegramApiException
 
 @Component
 class MyTelegramBot(
@@ -30,7 +32,7 @@ class MyTelegramBot(
     private val restTemplate = RestTemplate()
     private val MAX_MESSAGE_LENGTH = 4000
 
-    // Управление состоянием пользователей
+    // Хранение состояний пользователей
     private val userStates = mutableMapOf<Long, BotState>()
     private val userScrapeSettings = mutableMapOf<Long, ScrapeSettings>()
 
@@ -40,24 +42,26 @@ class MyTelegramBot(
     override fun onUpdateReceived(update: Update?) {
         if (update == null) return
 
-        // Если пользователь отправил команду /menu, сразу возвращаем главное меню
-        if (update.hasMessage() && update.message.text?.trim()?.equals("/menu", ignoreCase = true) == true) {
-            val chatId = update.message.chatId
-            userStates[chatId] = BotState.IDLE
-            userScrapeSettings[chatId] = ScrapeSettings()
-            showMainMenu(chatId, "Главное меню: выберите действие")
-            return
-        }
-
-        if (update.hasCallbackQuery()) {
-            handleCallback(update.callbackQuery)
-            return
-        }
-
         if (update.hasMessage()) {
             val message = update.message
             val chatId = message.chatId
             val text = message.text ?: ""
+
+            // Если пользователь заходит впервые, сразу показываем главное меню с приветствием
+            if (!userStates.containsKey(chatId)) {
+                userStates[chatId] = BotState.IDLE
+                userScrapeSettings[chatId] = ScrapeSettings()
+                showMainMenu(chatId, "Привет! Добро пожаловать. Выберите действие:")
+                return
+            }
+
+            // Если пользователь отправил команду /menu или нажал кнопку "🏠 Главное меню" – возвращаем в главное меню
+            if (text.trim().equals("/menu", ignoreCase = true) || text.trim() == "🏠 Главное меню") {
+                userStates[chatId] = BotState.IDLE
+                userScrapeSettings[chatId] = ScrapeSettings()
+                showMainMenu(chatId, "Главное меню: выберите действие")
+                return
+            }
 
             // Обработка документов (Excel или PDF)
             if (message.hasDocument()) {
@@ -74,11 +78,56 @@ class MyTelegramBot(
                 }
             }
 
-            when {
-                text.startsWith("/start") -> {
-                    userStates[chatId] = BotState.IDLE
-                    userScrapeSettings[chatId] = ScrapeSettings()
-                    showMainMenu(chatId, "Привет! Я бот для компании «Авторы». Выберите действие:")
+            // Обработка текстовых сообщений в зависимости от состояния диалога
+            when (userStates.getOrDefault(chatId, BotState.IDLE)) {
+                BotState.IDLE -> {
+                    when (text) {
+                        "📊 Скрапить учреждения" -> {
+                            userStates[chatId] = BotState.SELECT_SCRAPE_TYPE
+                            sendMessageWithKeyboard(chatId, "Выберите формат результата:", buildScrapeTypeKeyboard())
+                        }
+                        "📥 Загрузить Excel LandPlot" -> {
+                            userStates[chatId] = BotState.WAITING_FILE
+                            sendMessageWithKeyboard(chatId, "Пришлите Excel-файл (.xlsx)", buildBackToMenuKeyboard())
+                        }
+                        "🖼 Извлечь PDF изображения" -> {
+                            userStates[chatId] = BotState.WAITING_PDF_FILE
+                            sendMessageWithKeyboard(chatId, "Пришлите PDF-документ (.pdf)", buildBackToMenuKeyboard())
+                        }
+                        else -> {
+                            sendLongMessage(chatId.toString(), "Неизвестная команда. Для возврата в меню нажмите /menu.")
+                        }
+                    }
+                }
+                BotState.SELECT_SCRAPE_TYPE -> {
+                    when (text) {
+                        "Текст" -> {
+                            userScrapeSettings.getOrPut(chatId) { ScrapeSettings() }.excel = false
+                            userStates[chatId] = BotState.SELECT_SCRAPE_DISTRICTS
+                            sendMessageWithKeyboard(chatId, "Выберите район(ы) для скрапинга:", buildDistrictKeyboard(chatId))
+                        }
+                        "Excel" -> {
+                            userScrapeSettings.getOrPut(chatId) { ScrapeSettings() }.excel = true
+                            userStates[chatId] = BotState.SELECT_SCRAPE_DISTRICTS
+                            sendMessageWithKeyboard(chatId, "Выберите район(ы) для скрапинга:", buildDistrictKeyboard(chatId))
+                        }
+                        else -> {
+                            sendLongMessage(chatId.toString(), "Неизвестная команда. Выберите один из вариантов.")
+                        }
+                    }
+                }
+                BotState.SELECT_SCRAPE_DISTRICTS -> {
+                    when (text) {
+                        "Готово" -> {
+                            performScrape(chatId)
+                        }
+                        else -> {
+                            // Обработка выбора района; если нажата кнопка с галочкой – убираем её, иначе добавляем
+                            val district = text.replace("✔️ ", "")
+                            toggleDistrictSelection(chatId, district)
+                            sendMessageWithKeyboard(chatId, "Выберите район(ы) для скрапинга (отмеченные добавлены):", buildDistrictKeyboard(chatId))
+                        }
+                    }
                 }
                 else -> {
                     sendLongMessage(chatId.toString(), "Неизвестная команда. Для возврата в меню нажмите /menu.")
@@ -87,136 +136,120 @@ class MyTelegramBot(
         }
     }
 
-    private fun handleCallback(callbackQuery: org.telegram.telegrambots.meta.api.objects.CallbackQuery) {
-        val chatId = callbackQuery.message.chatId
-        val messageId = callbackQuery.message.messageId
-        val data = callbackQuery.data
-
-        when (data) {
-            "GO_TO_MENU" -> {
-                userStates[chatId] = BotState.IDLE
-                userScrapeSettings[chatId] = ScrapeSettings()
-                editTextAndKeyboard(chatId, messageId, "Главное меню: выберите действие", buildMainMenuButtons())
-            }
-            "DO_SCRAPE" -> {
-                userStates[chatId] = BotState.SELECT_SCRAPE_TYPE
-                editTextAndKeyboard(chatId, messageId, "Выберите формат результата:", buildScrapeTypeButtons())
-            }
-            "DO_UPLOAD" -> {
-                userStates[chatId] = BotState.WAITING_FILE
-                editTextAndKeyboard(chatId, messageId, "Пришлите Excel-файл (.xlsx)", buildBackToMenuKeyboard())
-            }
-            "DO_EXTRACT_PDF" -> {
-                userStates[chatId] = BotState.WAITING_PDF_FILE
-                editTextAndKeyboard(chatId, messageId, "Пришлите PDF-документ (.pdf)", buildBackToMenuKeyboard())
-            }
-            "SCRAPE_TEXT" -> {
-                userScrapeSettings.getOrPut(chatId) { ScrapeSettings() }.excel = false
-                userStates[chatId] = BotState.SELECT_SCRAPE_DISTRICTS
-                editTextAndKeyboard(chatId, messageId, "Выберите район(ы) для скрапинга:", buildDistrictButtons(chatId))
-            }
-            "SCRAPE_EXCEL" -> {
-                userScrapeSettings.getOrPut(chatId) { ScrapeSettings() }.excel = true
-                userStates[chatId] = BotState.SELECT_SCRAPE_DISTRICTS
-                editTextAndKeyboard(chatId, messageId, "Выберите район(ы) для скрапинга:", buildDistrictButtons(chatId))
-            }
-            "SCRAPE_DISTRICT_DONE" -> performScrape(chatId, messageId)
-            else -> {
-                if (data.startsWith("district_")) {
-                    val districtName = data.substringAfter("district_")
-                    toggleDistrictSelection(chatId, districtName)
-                    editTextAndKeyboard(chatId, messageId,
-                        "Выберите район(ы) для скрапинга (отмеченные добавлены):", buildDistrictButtons(chatId))
-                }
-            }
-        }
-    }
-
     /**
-     * Формирует главное меню с кнопками выбора действий.
+     * Отправка сообщения с ReplyKeyboardMarkup.
      */
-    private fun buildMainMenuButtons(): InlineKeyboardMarkup {
-        val scrapeBtn = InlineKeyboardButton.builder().text("📊 Скрапить учреждения").callbackData("DO_SCRAPE").build()
-        val uploadBtn = InlineKeyboardButton.builder().text("📥 Загрузить Excel LandPlot").callbackData("DO_UPLOAD").build()
-        val pdfBtn = InlineKeyboardButton.builder().text("🖼 Извлечь PDF изображения").callbackData("DO_EXTRACT_PDF").build()
-        return InlineKeyboardMarkup.builder().keyboard(
-            listOf(
-                listOf(scrapeBtn),
-                listOf(uploadBtn),
-                listOf(pdfBtn)
-            )
-        ).build()
-    }
-
-    private fun showMainMenu(chatId: Long, text: String) {
-        val buttons = buildMainMenuButtons()
+    private fun sendMessageWithKeyboard(chatId: Long, text: String, keyboard: ReplyKeyboardMarkup) {
         val msg = SendMessage().apply {
             this.chatId = chatId.toString()
             this.text = text
-            this.replyMarkup = buttons
+            this.replyMarkup = keyboard
         }
         try {
             execute(msg)
         } catch (e: TelegramApiException) {
-            logger.error("Ошибка отправки сообщения: ${e.message}", e)
+            logger.error("Ошибка отправки сообщения с клавиатурой: ${e.message}", e)
         }
     }
 
     /**
-     * Добавляет к меню кнопку "Главное меню" для возможности возврата.
+     * Показывает главное меню с кнопками.
      */
-    private fun buildBackToMenuKeyboard(): InlineKeyboardMarkup {
-        val menuBtn = InlineKeyboardButton.builder().text("🏠 Главное меню").callbackData("GO_TO_MENU").build()
-        return InlineKeyboardMarkup.builder().keyboard(listOf(listOf(menuBtn))).build()
-    }
-
-    private fun buildScrapeTypeButtons(): InlineKeyboardMarkup {
-        val textBtn = InlineKeyboardButton.builder().text("Текст").callbackData("SCRAPE_TEXT").build()
-        val excelBtn = InlineKeyboardButton.builder().text("Excel").callbackData("SCRAPE_EXCEL").build()
-        val menuBtn = InlineKeyboardButton.builder().text("🏠 Главное меню").callbackData("GO_TO_MENU").build()
-        return InlineKeyboardMarkup.builder().keyboard(listOf(listOf(textBtn, excelBtn), listOf(menuBtn))).build()
+    private fun showMainMenu(chatId: Long, text: String) {
+        sendMessageWithKeyboard(chatId, text, buildMainMenuKeyboard())
     }
 
     /**
-     * Формирует кнопки для выбора районов с учетом выбранных значений.
-     * Добавляет галочку перед именем выбранного района.
+     * Главное меню с кнопками, оформленными в стиле "Material View".
      */
-    private fun buildDistrictButtons(chatId: Long): InlineKeyboardMarkup {
-        val available = listOf("AVIA", "VAHI", "KIRO", "MOSC", "NOVO", "PRIV", "SOVI")
+    private fun buildMainMenuKeyboard(): ReplyKeyboardMarkup {
+        val keyboard = ReplyKeyboardMarkup()
+        val row1 = KeyboardRow().apply { add("📊 Скрапить учреждения") }
+        val row2 = KeyboardRow().apply { add("📥 Загрузить Excel LandPlot") }
+        val row3 = KeyboardRow().apply { add("🖼 Извлечь PDF изображения") }
+        keyboard.keyboard = listOf(row1, row2, row3)
+        keyboard.resizeKeyboard = true
+        keyboard.oneTimeKeyboard = false
+        return keyboard
+    }
+
+    /**
+     * Клавиатура для выбора типа скрапинга.
+     */
+    private fun buildScrapeTypeKeyboard(): ReplyKeyboardMarkup {
+        val keyboard = ReplyKeyboardMarkup()
+        val row1 = KeyboardRow().apply {
+            add("Текст")
+            add("Excel")
+        }
+        val row2 = KeyboardRow().apply { add("🏠 Главное меню") }
+        keyboard.keyboard = listOf(row1, row2)
+        keyboard.resizeKeyboard = true
+        keyboard.oneTimeKeyboard = false
+        return keyboard
+    }
+
+    /**
+     * Клавиатура для выбора районов.
+     * Отмечает выбранные районы галочкой.
+     */
+    private fun buildDistrictKeyboard(chatId: Long): ReplyKeyboardMarkup {
+        val keyboard = ReplyKeyboardMarkup()
         val settings = userScrapeSettings.getOrPut(chatId) { ScrapeSettings() }
-        val rows = mutableListOf<List<InlineKeyboardButton>>()
-        val rowSize = 3
-        available.chunked(rowSize).forEach { chunk ->
-            val row = chunk.map { district ->
+        val available = listOf("AVIA", "VAHI", "KIRO", "MOSC", "NOVO", "PRIV", "SOVI")
+        val rows = mutableListOf<KeyboardRow>()
+        available.chunked(3).forEach { chunk ->
+            val row = KeyboardRow()
+            chunk.forEach { district ->
                 val isSelected = settings.districts.contains(district)
-                val text = if (isSelected) "✔️ $district" else district
-                InlineKeyboardButton.builder()
-                    .text(text)
-                    .callbackData("district_$district")
-                    .build()
+                val buttonText = if (isSelected) "✔️ $district" else district
+                row.add(buttonText)
             }
             rows.add(row)
         }
-        // Добавляем строку с кнопками "Готово" и "🏠 Главное меню"
-        val doneBtn = InlineKeyboardButton.builder().text("Готово").callbackData("SCRAPE_DISTRICT_DONE").build()
-        val menuBtn = InlineKeyboardButton.builder().text("🏠 Главное меню").callbackData("GO_TO_MENU").build()
-        rows.add(listOf(doneBtn, menuBtn))
-        return InlineKeyboardMarkup.builder().keyboard(rows).build()
+        val lastRow = KeyboardRow().apply {
+            add("Готово")
+            add("🏠 Главное меню")
+        }
+        rows.add(lastRow)
+        keyboard.keyboard = rows
+        keyboard.resizeKeyboard = true
+        keyboard.oneTimeKeyboard = false
+        return keyboard
     }
 
+    /**
+     * Клавиатура с единственной кнопкой "🏠 Главное меню".
+     */
+    private fun buildBackToMenuKeyboard(): ReplyKeyboardMarkup {
+        val keyboard = ReplyKeyboardMarkup()
+        val row = KeyboardRow().apply { add("🏠 Главное меню") }
+        keyboard.keyboard = listOf(row)
+        keyboard.resizeKeyboard = true
+        keyboard.oneTimeKeyboard = false
+        return keyboard
+    }
+
+    /**
+     * Переключает выбор района для скрапинга.
+     */
     private fun toggleDistrictSelection(chatId: Long, district: String) {
         val settings = userScrapeSettings.getOrPut(chatId) { ScrapeSettings() }
         if (settings.districts.contains(district)) settings.districts.remove(district)
         else settings.districts.add(district)
     }
 
-    private fun performScrape(chatId: Long, messageId: Int) {
+    /**
+     * Запускает скрапинг с выбранными настройками.
+     */
+    private fun performScrape(chatId: Long) {
         val settings = userScrapeSettings[chatId] ?: ScrapeSettings()
         val urlBuilder = StringBuilder("$apiBaseUrl/scrape?update=true")
         if (settings.excel) urlBuilder.append("&excel=true")
         if (settings.districts.isNotEmpty()) urlBuilder.append("&districts=${settings.districts.joinToString(",")}")
         val finalUrl = urlBuilder.toString()
-        editTextAndKeyboard(chatId, messageId, "Запуск скрапинга...", buildBackToMenuKeyboard())
+
+        sendMessageWithKeyboard(chatId, "Запуск скрапинга...", buildBackToMenuKeyboard())
 
         try {
             if (settings.excel) {
@@ -275,15 +308,15 @@ class MyTelegramBot(
 
     private fun uploadExcelToServer(fileBytes: ByteArray, originalFilename: String): String {
         val url = "$apiBaseUrl/uploadLandplots?text=true"
-        val headers = org.springframework.http.HttpHeaders().apply {
+        val headers = HttpHeaders().apply {
             contentType = MediaType.MULTIPART_FORM_DATA
         }
-        val body = org.springframework.util.LinkedMultiValueMap<String, Any>()
+        val body = LinkedMultiValueMap<String, Any>()
         val fileResource = object : org.springframework.core.io.ByteArrayResource(fileBytes) {
             override fun getFilename() = originalFilename
         }
         body.add("file", fileResource)
-        val requestEntity = org.springframework.http.HttpEntity(body, headers)
+        val requestEntity = HttpEntity(body, headers)
         val response = restTemplate.postForEntity(url, requestEntity, String::class.java)
         return if (response.statusCode.is2xxSuccessful && !response.body.isNullOrEmpty()) response.body!!
         else "Не удалось загрузить данные. Код ответа: ${response.statusCodeValue}"
@@ -291,15 +324,15 @@ class MyTelegramBot(
 
     private fun uploadPdfToServer(fileBytes: ByteArray, originalFilename: String): ByteArray {
         val url = "$apiBaseUrl/extractPdfImages"
-        val headers = org.springframework.http.HttpHeaders().apply {
+        val headers = HttpHeaders().apply {
             contentType = MediaType.MULTIPART_FORM_DATA
         }
-        val body = org.springframework.util.LinkedMultiValueMap<String, Any>()
+        val body = LinkedMultiValueMap<String, Any>()
         val fileResource = object : org.springframework.core.io.ByteArrayResource(fileBytes) {
             override fun getFilename() = originalFilename
         }
         body.add("file", fileResource)
-        val requestEntity = org.springframework.http.HttpEntity(body, headers)
+        val requestEntity = HttpEntity(body, headers)
         val response = restTemplate.postForEntity(url, requestEntity, ByteArray::class.java)
         return response.body ?: ByteArray(0)
     }
@@ -335,20 +368,6 @@ class MyTelegramBot(
             } catch (e: TelegramApiException) {
                 logger.error("Ошибка отправки длинного сообщения: ${e.message}", e)
             }
-        }
-    }
-
-    private fun editTextAndKeyboard(chatId: Long, messageId: Int, newText: String, keyboard: InlineKeyboardMarkup?) {
-        val editMessage = EditMessageText().apply {
-            this.chatId = chatId.toString()
-            this.messageId = messageId
-            this.text = newText
-            this.replyMarkup = keyboard
-        }
-        try {
-            execute(editMessage)
-        } catch (e: TelegramApiException) {
-            logger.error("Ошибка редактирования сообщения: ${e.message}", e)
         }
     }
 }
