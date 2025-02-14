@@ -55,7 +55,7 @@ class MyTelegramBot(
                 return
             }
 
-            // Если пользователь отправил команду /menu или нажал кнопку "🏠 Главное меню" – возвращаем в главное меню
+            // Если получена команда /menu или нажата кнопка "🏠 Главное меню" – возвращаем в главное меню
             if (text.trim().equals("/menu", ignoreCase = true) || text.trim() == "🏠 Главное меню") {
                 userStates[chatId] = BotState.IDLE
                 userScrapeSettings[chatId] = ScrapeSettings()
@@ -70,11 +70,13 @@ class MyTelegramBot(
                         handleExcelFileUpload(message.document, chatId)
                         return
                     }
+
                     BotState.WAITING_PDF_FILE -> {
                         handlePdfFileUpload(message.document, chatId)
                         return
                     }
-                    else -> { }
+
+                    else -> {}
                 }
             }
 
@@ -86,49 +88,76 @@ class MyTelegramBot(
                             userStates[chatId] = BotState.SELECT_SCRAPE_TYPE
                             sendMessageWithKeyboard(chatId, "Выберите формат результата:", buildScrapeTypeKeyboard())
                         }
+
                         "📥 Загрузить Excel LandPlot" -> {
                             userStates[chatId] = BotState.WAITING_FILE
                             sendMessageWithKeyboard(chatId, "Пришлите Excel-файл (.xlsx)", buildBackToMenuKeyboard())
                         }
+
                         "🖼 Извлечь PDF изображения" -> {
                             userStates[chatId] = BotState.WAITING_PDF_FILE
                             sendMessageWithKeyboard(chatId, "Пришлите PDF-документ (.pdf)", buildBackToMenuKeyboard())
                         }
+
                         else -> {
-                            sendLongMessage(chatId.toString(), "Неизвестная команда. Для возврата в меню нажмите /menu.")
+                            sendLongMessage(
+                                chatId.toString(),
+                                "Неизвестная команда. Для возврата в меню нажмите /menu."
+                            )
                         }
                     }
                 }
+
                 BotState.SELECT_SCRAPE_TYPE -> {
                     when (text) {
                         "Текст" -> {
                             userScrapeSettings.getOrPut(chatId) { ScrapeSettings() }.excel = false
                             userStates[chatId] = BotState.SELECT_SCRAPE_DISTRICTS
-                            sendMessageWithKeyboard(chatId, "Выберите район(ы) для скрапинга:", buildDistrictKeyboard(chatId))
+                            sendMessageWithKeyboard(
+                                chatId,
+                                "Выберите район(ы) для скрапинга:",
+                                buildDistrictKeyboard(chatId)
+                            )
                         }
+
                         "Excel" -> {
                             userScrapeSettings.getOrPut(chatId) { ScrapeSettings() }.excel = true
                             userStates[chatId] = BotState.SELECT_SCRAPE_DISTRICTS
-                            sendMessageWithKeyboard(chatId, "Выберите район(ы) для скрапинга:", buildDistrictKeyboard(chatId))
+                            sendMessageWithKeyboard(
+                                chatId,
+                                "Выберите район(ы) для скрапинга:",
+                                buildDistrictKeyboard(chatId)
+                            )
                         }
+
                         else -> {
                             sendLongMessage(chatId.toString(), "Неизвестная команда. Выберите один из вариантов.")
                         }
                     }
                 }
+
                 BotState.SELECT_SCRAPE_DISTRICTS -> {
                     when (text) {
                         "Готово" -> {
                             performScrape(chatId)
                         }
+
                         else -> {
-                            // Обработка выбора района; если нажата кнопка с галочкой – убираем её, иначе добавляем
+                            // Обработка выбора района; убираем эмодзи галочки, если они присутствуют, затем переключаем выбор
                             val district = text.replace("✔️ ", "")
                             toggleDistrictSelection(chatId, district)
-                            sendMessageWithKeyboard(chatId, "Выберите район(ы) для скрапинга (отмеченные добавлены):", buildDistrictKeyboard(chatId))
+                            // Формируем список выбранных районов
+                            val selected = userScrapeSettings[chatId]?.districts?.joinToString(separator = ", ") ?: ""
+                            val messageText = if (selected.isNotEmpty()) {
+                                "Выберите район(ы) для скрапинга (отмеченные добавлены):\nВыбранные районы: $selected"
+                            } else {
+                                "Выберите район(ы) для скрапинга (отмеченные добавлены):"
+                            }
+                            sendMessageWithKeyboard(chatId, messageText, buildDistrictKeyboard(chatId))
                         }
                     }
                 }
+
                 else -> {
                     sendLongMessage(chatId.toString(), "Неизвестная команда. Для возврата в меню нажмите /menu.")
                 }
