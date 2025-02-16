@@ -5,8 +5,10 @@ import io.swagger.v3.oas.annotations.Parameter
 import io.swagger.v3.oas.annotations.media.Schema
 import io.swagger.v3.oas.annotations.responses.ApiResponse
 import io.swagger.v3.oas.annotations.responses.ApiResponses
+import jakarta.servlet.http.HttpServletRequest
 import org.obscurecore.developer.InstitutionService
 import org.obscurecore.developer.dto.District
+import org.obscurecore.developer.dto.InstitutionDetails
 import org.slf4j.LoggerFactory
 import org.springframework.core.io.ByteArrayResource
 import org.springframework.http.HttpHeaders
@@ -33,7 +35,7 @@ class InstitutionController(private val institutionService: InstitutionService) 
             Параметр update отвечает за обновление через скрапинг (true/false).
             Параметр districts позволяет указать список районов (например, AVIA, VAHI и т.д.).
             Параметр excel выбирает формат результата:
-            - false (по умолчанию) возвращает человеко-читаемый текст;
+            - false (по умолчанию) возвращает человеко-читаемый текст (для Telegram-бота);
             - true возвращает Excel-файл (XLSX) в бинарном формате.
         """
     )
@@ -44,7 +46,7 @@ class InstitutionController(private val institutionService: InstitutionService) 
             ApiResponse(responseCode = "500", description = "Внутренняя ошибка сервера")
         ]
     )
-    @GetMapping("/scrape", produces = [MediaType.APPLICATION_OCTET_STREAM_VALUE, MediaType.TEXT_PLAIN_VALUE])
+    @GetMapping("/scrape")
     fun scrapeInstitutions(
         @Parameter(
             description = "Флаг обновления данных через скрапинг",
@@ -65,38 +67,52 @@ class InstitutionController(private val institutionService: InstitutionService) 
             description = "Формат результата: Excel (true) или текст (false)",
             example = "false"
         )
-        @RequestParam(required = false, defaultValue = "false") excel: Boolean
+        @RequestParam(required = false, defaultValue = "false") excel: Boolean,
+
+        request: HttpServletRequest
     ): ResponseEntity<Any> {
         logger.info("Запрос /scrape: update=$update, districts=$districts, excel=$excel")
 
         val districtNames: List<String>? = districts?.map { it.value }
-        val institutions = institutionService.scrapeInstitutionsAsList(update, districtNames)
+        val institutions: List<InstitutionDetails> = institutionService.scrapeInstitutionsAsList(update, districtNames)
 
-        return if (excel) {
+        if (excel) {
             val excelBytes = institutionService.generateExcel(institutions)
             val resource = ByteArrayResource(excelBytes)
-            ResponseEntity.ok()
+            return ResponseEntity.ok()
                 .contentType(MediaType.APPLICATION_OCTET_STREAM)
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=institutions.xlsx")
                 .body(resource)
         } else {
-            val resultText = buildString {
-                if (institutions.isEmpty()) {
-                    append("Нет данных об образовательных учреждениях.\n")
-                } else {
-                    institutions.forEach { inst ->
-                        append("Учреждение:\n")
-                        append("• ID: ${inst.id}\n")
-                        append("• Тип: ${inst.type}\n")
-                        append("• Номер: ${inst.number}\n")
-                        append("• Количество учащихся: ${inst.studentsCount}\n")
-                        append("• Район: ${inst.district}\n")
-                        append("• Ссылка: ${inst.url}\n")
-                        append("-------------------------\n")
+            // Определяем тип клиента по User-Agent
+            val userAgent = request.getHeader("User-Agent") ?: ""
+            return if (userAgent.contains("Mozilla")) {
+                // Браузер -> возвращаем JSON
+                ResponseEntity.ok()
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(institutions)
+            } else {
+                // Telegram-бот -> возвращаем текстовое представление
+                val resultText = buildString {
+                    if (institutions.isEmpty()) {
+                        append("Нет данных об образовательных учреждениях.\n")
+                    } else {
+                        institutions.forEach { inst ->
+                            append("Учреждение:\n")
+                            append("• ID: ${inst.id}\n")
+                            append("• Тип: ${inst.type}\n")
+                            append("• Номер: ${inst.number}\n")
+                            append("• Количество учащихся: ${inst.studentsCount}\n")
+                            append("• Район: ${inst.district}\n")
+                            append("• Ссылка: ${inst.url}\n")
+                            append("-------------------------\n")
+                        }
                     }
                 }
+                ResponseEntity.ok()
+                    .contentType(MediaType.TEXT_PLAIN)
+                    .body(resultText)
             }
-            ResponseEntity.ok(resultText)
         }
     }
 }
